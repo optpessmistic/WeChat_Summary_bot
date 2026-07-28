@@ -1,0 +1,51 @@
+[project]
+name = "wechat-summary-bot"
+version = "0.1.0"
+description = "Local-first AI summaries for WeChatDataAnalysis exports"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+dependencies = [
+    "alembic>=1.14.0",
+    "fastapi>=0.115.0",
+    "httpx>=0.27.0",
+    "ijson>=3.3.0",
+    "jinja2>=3.1.4",
+    "keyring>=25.5.0",
+    "python-multipart>=0.0.18",
+    "sqlalchemy>=2.0.36",
+    "uvicorn[standard]>=0.32.0",
+]
+
+[project.scripts]
+wechat-summary = "wechat_summary_bot.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0.0",
+    "ruff>=0.8.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wechat_summary_bot"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"alembic.ini" = "wechat_summary_bot/alembic.ini"
+"migrations" = "wechat_summary_bot/migrations"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]

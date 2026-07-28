@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="本地优先、证据可追溯的微信聊天 AI 总结工具">
+  <title>微信脉络 · AI 聊天总结</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <a class="brand" href="#" aria-label="微信脉络首页">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <span><strong>微信脉络</strong><small>LOCAL CHAT INTELLIGENCE</small></span>
+      </a>
+      <nav class="nav-list" aria-label="主导航">
+        <button class="nav-item is-active" data-view="data">
+          <span class="nav-icon">01</span><span>数据资料库</span>
+        </button>
+        <button class="nav-item" data-view="analyze">
+          <span class="nav-icon">02</span><span>创建分析</span>
+        </button>
+        <button class="nav-item" data-view="reports">
+          <span class="nav-icon">03</span><span>历史报告</span>
+        </button>
+        <button class="nav-item" data-view="settings">
+          <span class="nav-icon">04</span><span>连接设置</span>
+        </button>
+      </nav>
+      <div class="privacy-note">
+        <span class="status-dot"></span>
+        <div><strong>仅在本机运行</strong><small>服务只监听 127.0.0.1</small></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">WECHAT SUMMARY WORKSPACE</p>
+          <h1 id="view-title">数据资料库</h1>
+        </div>
+        <div class="top-actions">
+          <button class="quiet-button" id="refresh-button">刷新</button>
+          <button class="job-indicator" id="job-indicator" aria-label="查看后台任务">
+            <span id="job-count">0</span> 个任务
+          </button>
+        </div>
+      </header>
+
+      <div id="toast-region" class="toast-region" aria-live="polite"></div>
+
+      <section class="view is-active" id="view-data">
+        <div class="hero-panel">
+          <div class="hero-copy">
+            <p class="section-kicker">从本地聊天，到清晰结论</p>
+            <h2>选择一段对话，<br><em>让重要内容浮现。</em></h2>
+            <p>从 WeChatDataAnalysis 自动导出，或上传已有 JSON/ZIP。原始文件解析后即删除，消息仅保存在你的电脑。</p>
+          </div>
+          <div class="hero-stat">
+            <span>资料库概览</span>
+            <strong id="hero-conversation-count">0</strong>
+            <small>个已导入会话</small>
+            <div class="hairline"></div>
+            <p><b id="hero-message-count">0</b> 条本地消息</p>
+          </div>
+        </div>
+
+        <div class="two-column">
+          <article class="panel">
+            <div class="panel-heading">
+              <div><span class="step-label">自动导入</span><h3>连接 WeChatDataAnalysis</h3></div>
+              <span class="connection-pill" id="upstream-pill">尚未检测</span>
+            </div>
+            <p class="panel-intro">请先启动 WeChatDataAnalysis，然后在这里选择账号、会话与时间。</p>
+            <div class="inline-row">
+              <button class="primary-button" id="connect-upstream">检测并读取会话</button>
+              <span class="muted" id="upstream-detail">默认 127.0.0.1:10392</span>
+            </div>
+            <form id="upstream-import-form" class="form-grid is-hidden">
+              <label>微信账号<select id="upstream-account" required></select></label>
+              <label class="span-2">搜索会话<input id="target-search" type="search" placeholder="输入群名、备注或昵称"></label>
+              <label class="span-2">会话<select id="upstream-target" required></select></label>
+              <label>开始日期<input id="upstream-start-date" type="date"></label>
+              <label>结束日期<input id="upstream-end-date" type="date"></label>
+              <button class="primary-button span-2" type="submit">导出并写入资料库</button>
+            </form>
+          </article>
+
+          <article class="panel upload-panel">
+            <div class="panel-heading">
+              <div><span class="step-label">备用方式</span><h3>上传导出文件</h3></div>
+            </div>
+            <p class="panel-intro">支持 WeChatDataAnalysis 导出的 ZIP，或其中任一 <code>messages.json</code>。</p>
+            <label class="dropzone" id="dropzone">
+              <input id="upload-input" type="file" accept=".zip,.json" hidden>
+              <span class="drop-icon">↥</span>
+              <strong>拖入文件或点击选择</strong>
+              <small>文件只会在本机处理 · 上限 2 GB</small>
+            </label>
+            <div id="upload-file-row" class="file-row is-hidden">
+              <span id="upload-filename"></span>
+              <button class="primary-button" id="upload-button">开始导入</button>
+            </div>
+          </article>
+        </div>
+
+        <div class="section-heading">
+          <div><p class="section-kicker">LOCAL LIBRARY</p><h2>本地会话</h2></div>
+          <label class="compact-search">筛选<input id="library-search" type="search" placeholder="会话名称"></label>
+        </div>
+        <div id="conversation-grid" class="conversation-grid">
+          <div class="empty-state">还没有会话。连接上游或上传导出文件后，会话会出现在这里。</div>
+        </div>
+      </section>
+
+      <section class="view" id="view-analyze">
+        <div class="analysis-layout">
+          <article class="panel analysis-form-panel">
+            <div class="panel-heading">
+              <div><span class="step-label">ANALYSIS BRIEF</span><h3>定义这次分析</h3></div>
+            </div>
+            <form id="analysis-form" class="form-grid">
+              <label class="span-2">本地会话<select id="analysis-conversation" required></select></label>
+              <fieldset class="span-2 segment-field">
+                <legend>分析模式</legend>
+                <div class="segmented">
+                  <label><input type="radio" name="analysis-mode" value="conversation" checked><span>整个会话</span></label>
+                  <label><input type="radio" name="analysis-mode" value="member"><span>群内成员</span></label>
+                </div>
+              </fieldset>
+              <label class="span-2 is-hidden" id="member-field">指定成员<select id="analysis-member"></select></label>
+              <label>开始日期<input id="analysis-start-date" type="date"></label>
+              <label>结束日期<input id="analysis-end-date" type="date"></label>
+              <label class="span-2">本次特别关注
+                <textarea id="analysis-focus" rows="4" maxlength="2000" placeholder="例如：重点整理确定的需求、负责人和截止日期"></textarea>
+              </label>
+              <label class="span-2">AI 服务<select id="analysis-provider" required></select></label>
+              <label class="toggle-row span-2">
+                <input id="analysis-pseudonymize" type="checkbox" checked>
+                <span><b>发送前假名化人员标识</b><small>成员名和 wxid 会替换为稳定代号，正文仍会发送给模型。</small></span>
+              </label>
+              <button class="primary-button span-2" type="submit">开始生成结构化报告</button>
+            </form>
+          </article>
+
+          <aside class="analysis-context">
+            <div class="context-card">
+              <span>当前范围</span>
+              <strong id="analysis-context-name">尚未选择会话</strong>
+              <dl>
+                <div><dt>入选消息</dt><dd id="context-messages">—</dd></div>
+                <div><dt>成员</dt><dd id="context-members">—</dd></div>
+                <div><dt>预估 tokens</dt><dd id="context-tokens">—</dd></div>
+                <div><dt>分段</dt><dd id="context-chunks">—</dd></div>
+                <div class="context-wide"><dt>时间</dt><dd id="context-range">—</dd></div>
+              </dl>
+            </div>
+            <div class="method-note">
+              <span class="method-number">2×</span>
+              <p><strong>分层提炼</strong>先逐段抽取事实，再合并主题、决定与待办；每项结论必须能回到原消息。</p>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-reports">
+        <div class="reports-layout">
+          <aside class="report-list-panel">
+            <div class="section-heading compact"><div><p class="section-kicker">ARCHIVE</p><h2>历史报告</h2></div></div>
+            <div id="report-list" class="report-list">
+              <div class="empty-state small">还没有报告。</div>
+            </div>
+          </aside>
+          <article id="report-viewer" class="report-viewer">
+            <div class="report-placeholder">
+              <span>⌁</span><h3>选择一份报告</h3><p>结构化结论与原文证据将在这里并排呈现。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="view" id="view-settings">
+        <div class="settings-grid">
+          <article class="panel">
+            <div class="panel-heading"><div><span class="step-label">DATA SOURCE</span><h3>上游连接</h3></div></div>
+            <form id="upstream-setting-form" class="stack-form">
+              <label>WeChatDataAnalysis 地址<input id="setting-upstream-url" type="url" required></label>
+              <p class="field-help">只接受 localhost 或回环 IP，聊天数据不会通过本应用暴露到局域网。</p>
+              <button class="secondary-button" type="submit">保存地址</button>
+            </form>
+          </article>
+          <article class="panel provider-editor">
+            <div class="panel-heading"><div><span class="step-label">MODEL PROVIDER</span><h3>AI 服务</h3></div></div>
+            <form id="provider-form" class="form-grid">
+              <input id="provider-id" type="hidden">
+              <label>名称<input id="provider-name" required placeholder="例如 DeepSeek"></label>
+              <label>类型<select id="provider-kind"><option value="openai_compatible">云端兼容 API</option><option value="ollama">Ollama 本地</option></select></label>
+              <label class="span-2">Base URL<input id="provider-base-url" type="url" required placeholder="https://api.example.com/v1"></label>
+              <label>模型<input id="provider-model" required placeholder="模型名称"></label>
+              <label>上下文窗口<input id="provider-context" type="number" min="8000" value="32000"></label>
+              <label class="span-2">API Key<input id="provider-api-key" type="password" autocomplete="new-password" placeholder="留空则不修改已保存密钥"></label>
+              <label class="toggle-row span-2"><input id="provider-default" type="checkbox"><span><b>设为默认服务</b></span></label>
+              <div class="form-actions span-2">
+                <button class="primary-button" type="submit">保存服务</button>
+                <button class="quiet-button" type="button" id="provider-reset">新建</button>
+              </div>
+            </form>
+            <div id="provider-list" class="provider-list"></div>
+          </article>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <aside class="job-drawer" id="job-drawer" aria-hidden="true">
+    <div class="drawer-header"><div><span class="step-label">BACKGROUND</span><h3>后台任务</h3></div><button id="close-job-drawer" aria-label="关闭">×</button></div>
+    <div id="job-list" class="job-list"></div>
+  </aside>
+  <div class="drawer-backdrop" id="drawer-backdrop"></div>
+
+  <dialog id="evidence-dialog">
+    <button class="dialog-close" id="evidence-close" aria-label="关闭">×</button>
+    <p class="section-kicker">SOURCE EVIDENCE</p>
+    <h3 id="evidence-title">原文证据</h3>
+    <div id="evidence-meta" class="evidence-meta"></div>
+    <blockquote id="evidence-content"></blockquote>
+  </dialog>
+
+  <script type="module" src="/static/app.js"></script>
+</body>
+</html>
