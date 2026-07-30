@@ -1,17 +1,53 @@
+# Virtual environments
 .venv/
 .venv-windows/
+venv/
+
+# Python caches and tooling
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .coverage
+.coverage.*
+coverage.xml
 htmlcov/
 .ruff_cache/
 .mypy_cache/
+
+# Build artifacts
 dist/
 build/
 *.egg-info/
+
+# Secrets and local configuration
 .env
-.env.local
+.env.*
+!.env.example
+
+# Local application state
 data/
 logs/
 tmp/
+reports/
+exports/
+*.log
+
+# SQLite databases and sidecar files
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# WeChat exports and generated reports may contain private conversations
+*.zip
+messages.json
+wechat-report-*.json
+wechat-report-*.md
+
+# Editor and operating-system files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

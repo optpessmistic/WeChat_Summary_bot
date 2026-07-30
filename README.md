@@ -4,6 +4,11 @@
 [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)
 导出聊天 JSON，也支持直接上传其 ZIP/JSON 导出文件。
 
+> [!IMPORTANT]
+> 本项目是社区维护的独立开源项目，与腾讯、微信及 WeChatDataAnalysis 的维护者均无
+> 官方关联，也未获得其背书。“微信”“WeChat”名称、标识及相关商标归腾讯公司及其
+> 关联权利人所有。本项目名称和说明中的相关称谓仅用于描述兼容性与用途。
+
 ## 能做什么
 
 - 总结与某个人的单聊；
@@ -23,8 +28,16 @@
 
 自动读取账号、会话和时间范围依赖
 [WeChatDataAnalysis](https://github.com/LifeArchiveProject/WeChatDataAnalysis)。
-它必须和微信数据运行在同一台电脑上，本项目不会自动安装、启动或修改它。只处理您本人
-合法持有或已取得明确授权访问的数据，并妥善保护解密后的聊天记录和密钥。
+WeChatDataAnalysis 是由其维护者独立开发和发布的上游项目；它必须和微信数据运行在
+同一台电脑上。本仓库不捆绑、镜像、复制或重新分发其源码和安装包，也不会自动安装、
+启动或修改它，仅通过其本机 HTTP API 或用户主动提供的导出文件进行集成。本仓库的 MIT
+许可证只覆盖本仓库自身代码，不授予对微信、WeChatDataAnalysis 或其他第三方软件和内容
+的权利。安装、使用、修改或分发 WeChatDataAnalysis 前，请查阅并遵守其仓库当时有效的
+[README](https://github.com/LifeArchiveProject/WeChatDataAnalysis#readme)、
+[第三方声明](https://github.com/LifeArchiveProject/WeChatDataAnalysis/blob/main/THIRD_PARTY_NOTICES.md)
+及其他适用条款。
+
+只处理您本人合法持有或已取得明确授权访问的数据，并妥善保护解密后的聊天记录和密钥。
 
 ### 推荐：安装官方桌面版
 
@@ -149,7 +162,8 @@ flowchart LR
 
 ## 网站与远程部署
 
-当前版本是单用户、本机优先应用，不是可直接暴露到公网的多用户网站：
+将本仓库设为公开源码仓库，只代表任何人都能查看和使用源代码，并不代表当前应用实例
+适合开放到互联网。当前版本是单用户、本机优先应用，不是可直接暴露到公网的多用户网站：
 
 - 服务和启动脚本固定监听 `127.0.0.1`；
 - 只接受 `localhost`、回环 IP 等本机 Host；
@@ -233,6 +247,9 @@ uv run ruff check .
 - 删除本地会话时会级联删除相关消息、分析任务和报告；
 - 也可只删除某份报告，不影响本地聊天资料；
 - 选择云端模型时，正文仍会发送给相应服务商，请根据内容敏感程度选择模型。
+
+发现安全问题时，请按照 [安全政策](SECURITY.md) 私下报告。不要在公开 Issue 中粘贴聊天
+原文、数据库、导出归档、API Key、微信数据库密钥或可利用的漏洞细节。
 
 ## 上游兼容性
 
