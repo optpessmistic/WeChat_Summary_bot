@@ -1,6 +1,6 @@
 [project]
 name = "wechat-summary-bot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local-first AI summaries for WeChatDataAnalysis exports"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -14,6 +14,7 @@ dependencies = [
     "keyring>=25.5.0",
     "python-multipart>=0.0.18",
     "sqlalchemy>=2.0.36",
+    "tzdata>=2025.2; sys_platform == 'win32'",
     "uvicorn[standard]>=0.32.0",
 ]
 

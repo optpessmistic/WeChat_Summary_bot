@@ -6,10 +6,11 @@ import time
 
 import httpx
 import pytest
+from sqlalchemy import select
 
 from wechat_summary_bot.db import session_scope
 from wechat_summary_bot.main import create_app
-from wechat_summary_bot.models import AnalysisJob, Report
+from wechat_summary_bot.models import AnalysisJob, Conversation, ProviderConfig, Report
 
 
 def payload() -> dict:
@@ -92,10 +93,13 @@ async def test_health_and_upload_flow(settings):
                     conversation_id=conversations[0]["id"],
                     report_json='{"overview":{"text":"测试"}}',
                     markdown="# 测试",
+                    metrics_json='{"model_calls": 2}',
                 )
                 session.add(report)
                 session.flush()
                 report_id = report.id
+            report_response = await client.get(f"/api/reports/{report_id}")
+            assert report_response.json()["metrics"] == {"model_calls": 2}
             delete_response = await client.delete(f"/api/reports/{report_id}")
             assert delete_response.status_code == 200
             assert (await client.get("/api/reports")).json()["reports"] == []
@@ -149,3 +153,112 @@ async def test_provider_api_never_returns_api_key(settings, monkeypatch):
                 "api_key" not in provider
                 for provider in settings_response.json()["providers"]
             )
+
+
+@pytest.mark.asyncio
+async def test_workflow_templates_crud_and_builtin_guards(settings):
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            workflows = (await client.get("/api/workflows")).json()["workflows"]
+            assert {item["id"] for item in workflows} == {
+                "builtin-fast",
+                "builtin-balanced",
+                "builtin-detailed",
+            }
+            balanced = next(item for item in workflows if item["id"] == "builtin-balanced")
+            assert balanced["definition"]["evidence_mode"] == "none"
+
+            forbidden_update = await client.put(
+                "/api/workflows/builtin-balanced",
+                json={
+                    "name": "不能修改",
+                    "description": "",
+                    "definition": balanced["definition"],
+                },
+            )
+            assert forbidden_update.status_code == 403
+            assert (await client.delete("/api/workflows/builtin-balanced")).status_code == 403
+
+            duplicate_response = await client.post(
+                "/api/workflows/builtin-balanced/duplicate"
+            )
+            assert duplicate_response.status_code == 201
+            duplicate = duplicate_response.json()["workflow"]
+            assert duplicate["is_builtin"] is False
+            updated_definition = {**duplicate["definition"], "chunk_tokens": 30_000}
+            update_response = await client.put(
+                f"/api/workflows/{duplicate['id']}",
+                json={
+                    "name": "我的工作流",
+                    "description": "用于测试",
+                    "definition": updated_definition,
+                },
+            )
+            assert update_response.status_code == 200
+            updated = update_response.json()["workflow"]
+            assert updated["name"] == "我的工作流"
+            assert updated["definition"]["chunk_tokens"] == 30_000
+
+            assert (await client.delete(f"/api/workflows/{duplicate['id']}")).status_code == 200
+            remaining_ids = {
+                item["id"]
+                for item in (await client.get("/api/workflows")).json()["workflows"]
+            }
+            assert duplicate["id"] not in remaining_ids
+
+
+@pytest.mark.asyncio
+async def test_analysis_job_snapshots_resolved_workflow(settings, monkeypatch):
+    app = create_app(settings)
+    async with app.router.lifespan_context(app):
+        with session_scope(app.state.session_factory) as session:
+            conversation = Conversation(
+                account="wxid_me",
+                external_username="wxid_chat",
+                display_name="工作群",
+                is_group=True,
+            )
+            session.add(conversation)
+            session.flush()
+            conversation_id = conversation.id
+            provider_id = session.scalar(select(ProviderConfig.id))
+        captured: list[dict] = []
+
+        def fake_start_analysis(input_data):
+            captured.append(input_data)
+            return "job-for-test"
+
+        monkeypatch.setattr(app.state.job_manager, "start_analysis", fake_start_analysis)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            old_request = await client.post(
+                "/api/analyses",
+                json={
+                    "conversation_id": conversation_id,
+                    "provider_id": provider_id,
+                },
+            )
+            assert old_request.status_code == 202
+            assert captured[-1]["workflow_id"] == "builtin-balanced"
+            assert captured[-1]["workflow_name"] == "均衡总结"
+            assert captured[-1]["workflow"]["schema_version"] == 1
+
+            definition = {
+                **captured[-1]["workflow"],
+                "chunk_tokens": 33_000,
+                "sections": ["overview", "topics"],
+            }
+            edited_request = await client.post(
+                "/api/analyses",
+                json={
+                    "conversation_id": conversation_id,
+                    "provider_id": provider_id,
+                    "workflow_id": "builtin-balanced",
+                    "workflow": definition,
+                },
+            )
+            assert edited_request.status_code == 202
+            assert captured[-1]["workflow_name"] == "均衡总结（已编辑）"
+            assert captured[-1]["workflow"]["chunk_tokens"] == 33_000

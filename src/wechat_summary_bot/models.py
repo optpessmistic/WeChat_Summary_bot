@@ -152,7 +152,20 @@ class Report(Base):
     markdown: Mapped[str] = mapped_column(Text)
     prompt_tokens: Mapped[int] = mapped_column(Integer, default=0)
     completion_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[int] = mapped_column(Integer, default=now_ts)
+
+
+class WorkflowTemplate(Base):
+    __tablename__ = "workflow_templates"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True, default=new_id)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    definition_json: Mapped[str] = mapped_column(Text)
+    is_builtin: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[int] = mapped_column(Integer, default=now_ts)
+    updated_at: Mapped[int] = mapped_column(Integer, default=now_ts)
 
 
 class ProviderConfig(Base):

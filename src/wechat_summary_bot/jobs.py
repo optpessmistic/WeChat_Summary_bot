@@ -18,6 +18,7 @@ from .models import AnalysisJob, ProviderConfig, Report, now_ts
 from .reports import render_markdown
 from .security import SecretStore
 from .upstream import UpstreamClient
+from .workflows import WorkflowDefinition, default_workflow
 
 TERMINAL_STATUSES = {"succeeded", "failed", "cancelled"}
 
@@ -85,9 +86,7 @@ class JobManager:
     def recover_interrupted_jobs(self) -> None:
         with session_scope(self.session_factory) as session:
             jobs = list(
-                session.scalars(
-                    select(AnalysisJob).where(AnalysisJob.status.in_(["queued", "running"]))
-                )
+                session.scalars(select(AnalysisJob).where(AnalysisJob.status.in_(["queued", "running"])))
             )
             for job in jobs:
                 job.status = "failed"
@@ -166,9 +165,7 @@ class JobManager:
                 return False
             if job.status in TERMINAL_STATUSES:
                 return True
-            cancel_running_analysis = (
-                job.job_type == "analysis" and job.status == "running"
-            )
+            cancel_running_analysis = job.job_type == "analysis" and job.status == "running"
             job.cancel_requested = True
             job.stage = "正在取消"
         if cancel_running_analysis:
@@ -243,11 +240,7 @@ class JobManager:
 
             result = await _run_blocking(perform_import)
             first_conversation = next(
-                (
-                    str(item.get("id"))
-                    for item in result.get("conversations") or []
-                    if item.get("id")
-                ),
+                (str(item.get("id")) for item in result.get("conversations") or [] if item.get("id")),
                 None,
             )
             self._update(
@@ -288,11 +281,7 @@ class JobManager:
             upstream_job = created.get("job") if isinstance(created, dict) else None
             if not isinstance(upstream_job, dict):
                 upstream_job = created if isinstance(created, dict) else {}
-            export_id = str(
-                upstream_job.get("exportId")
-                or upstream_job.get("export_id")
-                or ""
-            )
+            export_id = str(upstream_job.get("exportId") or upstream_job.get("export_id") or "")
             if not export_id:
                 raise RuntimeError("上游没有返回 exportId，可能版本不兼容。")
             with tempfile.NamedTemporaryFile(
@@ -305,14 +294,10 @@ class JobManager:
                 progress_value = 0
                 if isinstance(progress_raw, dict):
                     total = int(
-                        progress_raw.get("conversationsTotal")
-                        or progress_raw.get("conversations_total")
-                        or 0
+                        progress_raw.get("conversationsTotal") or progress_raw.get("conversations_total") or 0
                     )
                     done = int(
-                        progress_raw.get("conversationsDone")
-                        or progress_raw.get("conversations_done")
-                        or 0
+                        progress_raw.get("conversationsDone") or progress_raw.get("conversations_done") or 0
                     )
                     progress_value = int(done / total * 55) if total else 10
                 elif isinstance(progress_raw, (int, float)):
@@ -372,6 +357,12 @@ class JobManager:
                         raise AnalysisError("AI 服务配置不存在。")
                     session.expunge(provider)
                 api_key = self.secret_store.get(provider.id)
+                workflow_raw = input_data.get("workflow")
+                workflow = (
+                    WorkflowDefinition.model_validate(workflow_raw)
+                    if isinstance(workflow_raw, dict)
+                    else default_workflow()
+                )
 
                 async def on_progress(stage: str, progress: int) -> None:
                     self._update(job_id, stage=stage, progress=progress)
@@ -383,9 +374,21 @@ class JobManager:
                     mode=str(input_data["mode"]),
                     focus=str(input_data.get("focus") or ""),
                     pseudonymize=bool(input_data.get("pseudonymize", True)),
-                    chunk_token_budget=self.settings.chunk_token_budget,
+                    workflow=workflow,
                     is_cancelled=lambda: self.is_cancelled(job_id),
                     on_progress=on_progress,
+                )
+                output.report.setdefault("metadata", {}).update(
+                    {
+                        "workflow_id": str(input_data.get("workflow_id") or ""),
+                        "workflow_name": str(input_data.get("workflow_name") or "均衡总结"),
+                    }
+                )
+                output.metrics.update(
+                    {
+                        "workflow_id": str(input_data.get("workflow_id") or ""),
+                        "workflow_name": str(input_data.get("workflow_name") or "均衡总结"),
+                    }
                 )
                 markdown = render_markdown(output.report)
                 with session_scope(self.session_factory) as session:
@@ -396,6 +399,7 @@ class JobManager:
                         markdown=markdown,
                         prompt_tokens=output.usage.prompt_tokens,
                         completion_tokens=output.usage.completion_tokens,
+                        metrics_json=json.dumps(output.metrics, ensure_ascii=False),
                     )
                     session.add(report)
                     session.flush()
@@ -410,6 +414,10 @@ class JobManager:
                         "estimated_input_tokens": output.estimated_input_tokens,
                         "prompt_tokens": output.usage.prompt_tokens,
                         "completion_tokens": output.usage.completion_tokens,
+                        "reasoning_tokens": output.usage.reasoning_tokens,
+                        "cached_prompt_tokens": output.usage.cached_prompt_tokens,
+                        "total_tokens": (output.usage.prompt_tokens + output.usage.completion_tokens),
+                        "metrics": output.metrics,
                     },
                 )
             except (AnalysisCancelled, asyncio.CancelledError):

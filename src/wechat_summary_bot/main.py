@@ -24,8 +24,7 @@ from .ai import (
     AnalysisError,
     OpenAICompatibleClient,
     Pseudonymizer,
-    chunk_messages,
-    effective_chunk_token_budget,
+    build_analysis_preview,
     load_analysis_material,
 )
 from .config import Settings, get_settings
@@ -39,10 +38,13 @@ from .models import (
     ProviderConfig,
     Report,
     SettingRecord,
+    WorkflowTemplate,
+    new_id,
     now_ts,
 )
 from .security import SecretStore
 from .upstream import UpstreamClient, UpstreamError, validate_loopback_url
+from .workflows import WorkflowDefinition, builtin_workflows, default_workflow
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 PACKAGE_DIR = Path(__file__).resolve().parent
@@ -69,6 +71,14 @@ class AnalysisRequest(BaseModel):
     focus: str = Field(default="", max_length=2_000)
     provider_id: str
     pseudonymize: bool = True
+    workflow_id: str | None = Field(default=None, max_length=64)
+    workflow: WorkflowDefinition | None = None
+
+
+class WorkflowTemplateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    description: str = Field(default="", max_length=4_000)
+    definition: WorkflowDefinition
 
 
 class ProviderRequest(BaseModel):
@@ -157,6 +167,98 @@ def _provider_public(provider: ProviderConfig, has_key: bool) -> dict[str, Any]:
     }
 
 
+def _workflow_public(template: WorkflowTemplate) -> dict[str, Any]:
+    definition = WorkflowDefinition.model_validate_json(template.definition_json)
+    return {
+        "id": template.id,
+        "name": template.name,
+        "description": template.description,
+        "definition": definition.model_dump(mode="json"),
+        "is_builtin": template.is_builtin,
+        "created_at": template.created_at,
+        "updated_at": template.updated_at,
+    }
+
+
+def _seed_builtin_workflows(session: Any) -> None:
+    timestamp = now_ts()
+    for builtin in builtin_workflows():
+        definition_json = builtin.definition.model_dump_json()
+        template = session.get(WorkflowTemplate, builtin.id)
+        if template is None:
+            session.add(
+                WorkflowTemplate(
+                    id=builtin.id,
+                    name=builtin.name,
+                    description=builtin.description,
+                    definition_json=definition_json,
+                    is_builtin=True,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+            )
+            continue
+        if not template.is_builtin:
+            raise RuntimeError(f"内置工作流 ID 被自定义模板占用：{builtin.id}")
+        if (
+            template.name != builtin.name
+            or template.description != builtin.description
+            or template.definition_json != definition_json
+        ):
+            template.name = builtin.name
+            template.description = builtin.description
+            template.definition_json = definition_json
+            template.updated_at = timestamp
+
+
+def _resolve_workflow(
+    session: Any,
+    *,
+    workflow_id: str | None,
+    inline: WorkflowDefinition | None,
+) -> tuple[str | None, str, WorkflowDefinition]:
+    selected_id = workflow_id
+    template: WorkflowTemplate | None = None
+    if selected_id:
+        template = session.get(WorkflowTemplate, selected_id)
+        if template is None:
+            raise HTTPException(status_code=404, detail="工作流模板不存在。")
+
+    if inline is not None:
+        definition = inline.model_copy(deep=True)
+        if template is None:
+            return None, "临时自定义工作流", definition
+        stored = WorkflowDefinition.model_validate_json(template.definition_json)
+        name = template.name if stored == definition else f"{template.name}（已编辑）"
+        return template.id, name, definition
+
+    if template is not None:
+        return (
+            template.id,
+            template.name,
+            WorkflowDefinition.model_validate_json(template.definition_json),
+        )
+
+    default_id = "builtin-balanced"
+    template = session.get(WorkflowTemplate, default_id)
+    if template is not None:
+        return (
+            template.id,
+            template.name,
+            WorkflowDefinition.model_validate_json(template.definition_json),
+        )
+    return default_id, "均衡总结", default_workflow()
+
+
+def _clean_workflow_template_body(
+    body: WorkflowTemplateRequest,
+) -> tuple[str, str, str]:
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="工作流名称不能为空。")
+    return name, body.description.strip(), body.definition.model_dump_json()
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     settings = settings or get_settings()
     engine, session_factory = create_database(settings)
@@ -196,6 +298,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 )
             if session.get(SettingRecord, "upstream_url") is None:
                 _set_setting(session, "upstream_url", settings.upstream_url)
+            _seed_builtin_workflows(session)
         yield
         for task in list(manager.tasks.values()):
             task.cancel()
@@ -206,7 +309,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app = FastAPI(
         title="微信脉络",
         description="本地优先的微信聊天 AI 总结工具",
-        version="0.1.0",
+        version="0.2.0",
         lifespan=lifespan,
     )
     app.add_middleware(
@@ -229,7 +332,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
-        return {"status": "ok", "service": "wechat-summary-bot", "version": "0.1.0"}
+        return {"status": "ok", "service": "wechat-summary-bot", "version": "0.2.0"}
 
     @app.get("/api/settings")
     async def get_app_settings() -> dict[str, Any]:
@@ -250,6 +353,104 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         with session_scope(session_factory) as session:
             _set_setting(session, "upstream_url", value)
         return {"status": "success", "upstream_url": value}
+
+    @app.get("/api/workflows")
+    async def list_workflows() -> dict[str, Any]:
+        with session_factory() as session:
+            rows = list(
+                session.scalars(
+                    select(WorkflowTemplate).order_by(
+                        WorkflowTemplate.is_builtin.desc(),
+                        WorkflowTemplate.created_at,
+                        WorkflowTemplate.name,
+                    )
+                )
+            )
+            builtin_order = {
+                "builtin-fast": 0,
+                "builtin-balanced": 1,
+                "builtin-detailed": 2,
+            }
+            rows.sort(
+                key=lambda item: (
+                    0 if item.is_builtin else 1,
+                    builtin_order.get(item.id, 99) if item.is_builtin else item.created_at,
+                    item.name,
+                )
+            )
+            workflows = [_workflow_public(item) for item in rows]
+        return {"workflows": workflows}
+
+    @app.post("/api/workflows", status_code=201)
+    async def create_workflow(body: WorkflowTemplateRequest) -> dict[str, Any]:
+        name, description, definition_json = _clean_workflow_template_body(body)
+        with session_scope(session_factory) as session:
+            template = WorkflowTemplate(
+                id=new_id(),
+                name=name,
+                description=description,
+                definition_json=definition_json,
+                is_builtin=False,
+            )
+            session.add(template)
+            session.flush()
+            public = _workflow_public(template)
+        return {"status": "success", "workflow": public}
+
+    @app.put("/api/workflows/{workflow_id}")
+    async def update_workflow(
+        workflow_id: str,
+        body: WorkflowTemplateRequest,
+    ) -> dict[str, Any]:
+        name, description, definition_json = _clean_workflow_template_body(body)
+        with session_scope(session_factory) as session:
+            template = session.get(WorkflowTemplate, workflow_id)
+            if template is None:
+                raise HTTPException(status_code=404, detail="工作流模板不存在。")
+            if template.is_builtin:
+                raise HTTPException(
+                    status_code=403,
+                    detail="内置工作流不可修改，请先复制为自定义模板。",
+                )
+            template.name = name
+            template.description = description
+            template.definition_json = definition_json
+            template.updated_at = now_ts()
+            session.flush()
+            public = _workflow_public(template)
+        return {"status": "success", "workflow": public}
+
+    @app.post("/api/workflows/{workflow_id}/duplicate", status_code=201)
+    async def duplicate_workflow(workflow_id: str) -> dict[str, Any]:
+        with session_scope(session_factory) as session:
+            source = session.get(WorkflowTemplate, workflow_id)
+            if source is None:
+                raise HTTPException(status_code=404, detail="工作流模板不存在。")
+            template = WorkflowTemplate(
+                id=new_id(),
+                name=f"{source.name[:116]} 副本",
+                description=source.description,
+                definition_json=source.definition_json,
+                is_builtin=False,
+            )
+            session.add(template)
+            session.flush()
+            public = _workflow_public(template)
+        return {"status": "success", "workflow": public}
+
+    @app.delete("/api/workflows/{workflow_id}")
+    async def delete_workflow(workflow_id: str) -> dict[str, Any]:
+        with session_scope(session_factory) as session:
+            template = session.get(WorkflowTemplate, workflow_id)
+            if template is None:
+                raise HTTPException(status_code=404, detail="工作流模板不存在。")
+            if template.is_builtin:
+                raise HTTPException(
+                    status_code=403,
+                    detail="内置工作流不可删除。",
+                )
+            session.delete(template)
+        return {"status": "success"}
 
     def current_upstream_url() -> str:
         with session_factory() as session:
@@ -488,15 +689,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             if provider is None:
                 raise HTTPException(status_code=404, detail="AI 服务配置不存在。")
             session.expunge(provider)
+        client = OpenAICompatibleClient(provider, secret_store.get(provider.id))
         try:
-            result, usage = await OpenAICompatibleClient(
-                provider, secret_store.get(provider.id)
-            ).complete_json(
+            result, usage = await client.complete_json(
                 system="你是连接测试程序，只返回 JSON。",
                 user='请返回 {"ok": true}，不要添加其他内容。',
             )
         except Exception as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
+        finally:
+            await client.aclose()
         return {
             "status": "success",
             "model_response": result,
@@ -527,6 +729,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 raise HTTPException(status_code=400, detail="指定成员模式需要选择成员。")
             if session.get(ProviderConfig, body.provider_id) is None:
                 raise HTTPException(status_code=404, detail="AI 服务配置不存在。")
+            workflow_id, workflow_name, workflow = _resolve_workflow(
+                session,
+                workflow_id=body.workflow_id,
+                inline=body.workflow,
+            )
         job_id = manager.start_analysis(
             {
                 "conversation_id": body.conversation_id,
@@ -537,6 +744,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "focus": body.focus,
                 "provider_id": body.provider_id,
                 "pseudonymize": body.pseudonymize,
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "workflow": workflow.model_dump(mode="json"),
             }
         )
         return {"status": "accepted", "job_id": job_id}
@@ -552,6 +762,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                         status_code=404,
                         detail="AI 服务配置不存在。",
                     )
+                workflow_id, workflow_name, workflow = _resolve_workflow(
+                    session,
+                    workflow_id=body.workflow_id,
+                    inline=body.workflow,
+                )
                 material = load_analysis_material(
                     session,
                     conversation_id=body.conversation_id,
@@ -568,22 +783,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     if body.pseudonymize
                     else None
                 )
-                chunks, estimated_tokens, limitations = chunk_messages(
-                    material.selected_messages,
-                    token_budget=effective_chunk_token_budget(
-                        provider,
-                        requested_budget=settings.chunk_token_budget,
-                        focus=body.focus,
-                    ),
+                preview = build_analysis_preview(
+                    material=material,
+                    provider=provider,
+                    focus=body.focus,
                     pseudonymizer=pseudonymizer,
+                    workflow=workflow,
                 )
         except AnalysisError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {
+            **preview,
             "selected_message_count": len(material.selected_messages),
-            "estimated_input_tokens": estimated_tokens,
-            "chunk_count": len(chunks),
-            "limitations": limitations,
+            "workflow_id": workflow_id,
+            "workflow_name": workflow_name,
+            "workflow": workflow.model_dump(mode="json"),
         }
 
     @app.get("/api/reports")
@@ -623,6 +837,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 "markdown": report.markdown,
                 "prompt_tokens": report.prompt_tokens,
                 "completion_tokens": report.completion_tokens,
+                "metrics": json.loads(report.metrics_json or "{}"),
                 "created_at": report.created_at,
             }
 
